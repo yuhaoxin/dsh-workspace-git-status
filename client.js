@@ -338,6 +338,14 @@ window.__ModuleLoader__.load({
       const [showCommit, setShowCommit] = React.useState(false);
       const [showFiles, setShowFiles] = React.useState(false);
       const [feedback, setFeedback] = React.useState(null);
+      const dirty = pendingCount(workspace) > 0;
+
+      // 改动被提交或丢弃后收起与改动相关的面板，避免它们在之后出现新改动时自行展开。
+      React.useEffect(() => {
+        if (dirty) return;
+        setConfirmDiscard(false);
+        setShowCommit(false);
+      }, [dirty]);
 
       const run = async body => {
         setFeedback(null);
@@ -387,7 +395,7 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void run({ action: 'pull' }) }, t('pull')),
                 h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void run({ action: 'push' }) }, t('push')),
                 h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void openBranches() }, t('branch')),
-                confirmDiscard
+                dirty && confirmDiscard
                   ? h(
                       React.Fragment,
                       null,
@@ -395,13 +403,17 @@ window.__ModuleLoader__.load({
                       h('button', { type: 'button', className: 'wgs-button wgs-danger', disabled: busy, onClick: () => { setConfirmDiscard(false); void run({ action: 'discard' }); } }, t('confirm')),
                       h('button', { type: 'button', className: 'wgs-button', onClick: () => setConfirmDiscard(false) }, t('cancel')),
                     )
-                  : h('button', { type: 'button', className: 'wgs-button wgs-danger', disabled: busy, onClick: () => setConfirmDiscard(true) }, t('discard')),
-                h('button', {
-                  type: 'button',
-                  className: 'wgs-button wgs-primary',
-                  disabled: busy,
-                  onClick: () => setShowCommit(value => !value),
-                }, t('commit')),
+                  : dirty
+                    ? h('button', { type: 'button', className: 'wgs-button wgs-danger', disabled: busy, onClick: () => setConfirmDiscard(true) }, t('discard'))
+                    : null,
+                dirty
+                  ? h('button', {
+                      type: 'button',
+                      className: 'wgs-button wgs-primary',
+                      disabled: busy,
+                      onClick: () => setShowCommit(value => !value),
+                    }, t('commit'))
+                  : null,
                 h('button', {
                   type: 'button',
                   className: 'wgs-button',
@@ -413,7 +425,7 @@ window.__ModuleLoader__.load({
           repo && showFiles
             ? h(FileList, { files: workspace.files })
             : null,
-          repo && showCommit
+          repo && showCommit && dirty
             ? h(
                 'div',
                 { className: 'wgs-actions wgs-commit-panel' },
