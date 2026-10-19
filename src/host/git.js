@@ -1,13 +1,14 @@
 /**
- * 读取一个工作区的 Git 状态。
+ * 读取一个工作区的 Git 状态，并执行面板允许的少量写操作。
  *
- * `git` 可执行文件由调用方解析一次并以绝对路径传入。命令固定使用
- * porcelain v2，计数来自稳定的机器格式；环境固定为 C locale，因为非英文
- * 系统上 `git status` 的致命错误也是本地化文本，而本模块要靠这两条英文
- * 消息区分“不是仓库”和“裸仓库”。
+ * `git` 可执行文件由调用方解析一次并以绝对路径传入。所有命令固定使用
+ * C locale：非英文系统上 `git status` 的致命错误也是本地化文本，而本模块
+ * 要靠这两条英文消息区分“不是仓库”和“裸仓库”。写操作同样固定 locale，
+ * 让错误信息可以直接展示。
  */
 
 const TIMEOUT_MS = 5_000;
+const ACTION_TIMEOUT_MS = 30_000;
 const GRACE_MS = 2_000;
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
@@ -71,22 +72,20 @@ function firstLine(text) {
 }
 
 /**
- * 在工作区目录跑一次 `git status` 并归一化成面板用的状态对象。
- *
- * 返回值总是 `{ state, ... }`，不会抛错：单个工作区的失败不能中断整轮扫描。
+ * 跑一条 git 命令并返回退出结果。只用于状态读取与操作，不解释业务语义。
  */
-export async function readGitStatus(subprocess, gitPath, workspacePath) {
+async function runGit(subprocess, gitPath, cwd, args, timeoutMs) {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, TIMEOUT_MS);
+  }, timeoutMs);
 
   try {
     const handle = subprocess.spawn({
-      argv: [gitPath, 'status', '--porcelain=v2', '--branch', '--untracked-files=normal'],
-      cwd: workspacePath,
+      argv: [gitPath, ...args],
+      cwd,
       stdio: {
         stdin: 'ignore',
         stdout: { maxBytes: MAX_STDOUT_BYTES },
@@ -98,24 +97,103 @@ export async function readGitStatus(subprocess, gitPath, workspacePath) {
     });
 
     const outcome = await handle.done;
-    if (timedOut) return { state: 'error', error: 'timeout' };
-
-    const stderr = readText(handle.collected.stderr);
-    if (outcome.exitCode === 0) return parsePorcelainV2(readText(handle.collected.stdout));
-    if (outcome.exitCode === 128 && /not a git repository/i.test(stderr)) {
-      return { state: 'not-repo' };
-    }
-    if (outcome.exitCode === 128 && /must be run in a work tree/i.test(stderr)) {
-      return { state: 'error', error: 'bare repository' };
-    }
     return {
-      state: 'error',
-      error: firstLine(stderr) || `git exited with ${outcome.exitCode ?? outcome.signal}`,
+      timedOut,
+      exitCode: outcome.exitCode,
+      signal: outcome.signal,
+      stdout: readText(handle.collected.stdout),
+      stderr: readText(handle.collected.stderr),
     };
   } catch (error) {
-    if (timedOut) return { state: 'error', error: 'timeout' };
-    return { state: 'error', error: error instanceof Error ? error.message : String(error) };
+    return {
+      timedOut,
+      exitCode: null,
+      signal: null,
+      stdout: '',
+      stderr: error instanceof Error ? error.message : String(error),
+    };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 读取状态。返回值总是 `{ state, ... }`，不会抛错：单个工作区的失败不能
+ * 中断整轮扫描。
+ */
+export async function readGitStatus(subprocess, gitPath, workspacePath) {
+  const result = await runGit(
+    subprocess,
+    gitPath,
+    workspacePath,
+    ['status', '--porcelain=v2', '--branch', '--untracked-files=normal'],
+    TIMEOUT_MS,
+  );
+
+  if (result.timedOut) return { state: 'error', error: 'timeout' };
+  if (result.exitCode === 0) return parsePorcelainV2(result.stdout);
+  if (result.exitCode === 128 && /not a git repository/i.test(result.stderr)) {
+    return { state: 'not-repo' };
+  }
+  if (result.exitCode === 128 && /must be run in a work tree/i.test(result.stderr)) {
+    return { state: 'error', error: 'bare repository' };
+  }
+  return {
+    state: 'error',
+    error: firstLine(result.stderr) || `git exited with ${result.exitCode ?? result.signal}`,
+  };
+}
+
+const ACTIONS = {
+  stage: () => ['add', '--all'],
+  unstage: () => ['reset', '--quiet'],
+  commit: message => ['commit', '-m', message],
+  fetch: () => ['fetch', '--prune'],
+  pull: () => ['pull', '--ff-only'],
+  push: () => ['push'],
+  branches: () => ['branch', '--format=%(refname:short)'],
+  checkout: branch => ['checkout', branch],
+  createBranch: branch => ['checkout', '-b', branch],
+  discard: () => ['reset', '--hard', 'HEAD'],
+};
+
+/**
+ * 校验面板能发起的动作参数。返回值是规范化后的参数，非法输入抛错。
+ */
+export function normalizeAction(action, branch, message) {
+  if (!Object.hasOwn(ACTIONS, action)) throw new Error('unknown action');
+  if (action === 'checkout' || action === 'createBranch') {
+    if (typeof branch !== 'string' || branch.trim() === '') throw new Error('branch is required');
+    return { action, branch: branch.trim() };
+  }
+  if (action === 'commit') {
+    if (typeof message !== 'string' || message.trim() === '') throw new Error('commit message is required');
+    return { action, message: message.trim() };
+  }
+  return { action };
+}
+
+/**
+ * 执行一个动作。调用方已经校验过参数与工作区存在性。
+ */
+export async function runAction(subprocess, gitPath, workspacePath, request) {
+  const args = ACTIONS[request.action](request.branch ?? request.message);
+  const result = await runGit(subprocess, gitPath, workspacePath, args, ACTION_TIMEOUT_MS);
+
+  if (request.action === 'discard' && result.exitCode === 0) {
+    const clean = await runGit(subprocess, gitPath, workspacePath, ['clean', '-fd'], ACTION_TIMEOUT_MS);
+    if (clean.exitCode !== 0) {
+      return { ok: false, error: firstLine(clean.stderr) || 'clean failed' };
+    }
+  }
+
+  if (request.action === 'branches') {
+    if (result.exitCode !== 0) return { ok: false, error: firstLine(result.stderr) || 'git branch failed' };
+    return { ok: true, branches: result.stdout.split('\n').map(line => line.trim()).filter(Boolean) };
+  }
+
+  if (result.exitCode !== 0) {
+    return { ok: false, error: firstLine(result.stderr) || `git exited with ${result.exitCode ?? result.signal}` };
+  }
+  return { ok: true };
 }

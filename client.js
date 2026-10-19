@@ -7,6 +7,7 @@ window.__ModuleLoader__.load({
     const NS = 'workspaceGitStatus';
     const POLL_MS = 5_000;
     const ENDPOINT = '/api/workspace-git/status';
+    const ACTION_ENDPOINT = '/api/workspace-git/action';
 
     const zh = {
       nav: 'Git 状态',
@@ -31,6 +32,23 @@ window.__ModuleLoader__.load({
       gitMissing: '未找到 git 可执行文件，无法读取仓库状态。',
       timeout: '读取超时',
       bareRepo: '裸仓库，没有工作区',
+      stageAll: '暂存全部',
+      unstageAll: '取消暂存',
+      commit: '提交',
+      commitPlaceholder: '提交信息',
+      fetch: '抓取',
+      pull: '拉取',
+      push: '推送',
+      branch: '分支',
+      newBranchPlaceholder: '新分支名',
+      create: '创建',
+      discard: '丢弃改动',
+      discardConfirm: '确认丢弃全部改动？',
+      confirm: '确认',
+      cancel: '取消',
+      actionFailed: '操作失败',
+      actionDone: '操作完成',
+      branchesEmpty: '没有可用分支',
     };
 
     const en = {
@@ -56,6 +74,23 @@ window.__ModuleLoader__.load({
       gitMissing: 'The git executable was not found, so repository status cannot be read.',
       timeout: 'Read timed out',
       bareRepo: 'Bare repository without a work tree',
+      stageAll: 'Stage all',
+      unstageAll: 'Unstage all',
+      commit: 'Commit',
+      commitPlaceholder: 'Commit message',
+      fetch: 'Fetch',
+      pull: 'Pull',
+      push: 'Push',
+      branch: 'Branch',
+      newBranchPlaceholder: 'New branch name',
+      create: 'Create',
+      discard: 'Discard changes',
+      discardConfirm: 'Discard all changes?',
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      actionFailed: 'Action failed',
+      actionDone: 'Done',
+      branchesEmpty: 'No branches available',
     };
 
     let t;
@@ -157,6 +192,19 @@ window.__ModuleLoader__.load({
         : date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
+    async function postAction(workspaceId, body) {
+      const response = await fetch(ACTION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, ...body }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || `HTTP ${response.status}`);
+      }
+      return result;
+    }
+
     function GitIcon({ size = 20, active = false }) {
       const state = useGitStatus();
       const dirty = dirtyCount(state.data);
@@ -240,8 +288,44 @@ window.__ModuleLoader__.load({
       return h('span', { className: 'wgs-counts' }, chips);
     }
 
-    function WorkspaceRow({ workspace }) {
+    function WorkspaceRow({ workspace, onAction, busy }) {
       const repo = workspace.state === 'repo';
+      const [message, setMessage] = React.useState('');
+      const [branchName, setBranchName] = React.useState('');
+      const [branches, setBranches] = React.useState(null);
+      const [confirmDiscard, setConfirmDiscard] = React.useState(false);
+      const [showCommit, setShowCommit] = React.useState(false);
+      const [feedback, setFeedback] = React.useState(null);
+
+      const run = async body => {
+        setFeedback(null);
+        try {
+          const result = await onAction(workspace.id, body);
+          if (body.action !== 'branches') setFeedback({ ok: true });
+          if (body.action === 'commit') {
+            setMessage('');
+            setShowCommit(false);
+          }
+          if (body.action === 'checkout' || body.action === 'createBranch') {
+            setBranches(null);
+            setBranchName('');
+          }
+          return result;
+        } catch (error) {
+          setFeedback({ ok: false, error: error instanceof Error ? error.message : String(error) });
+          return null;
+        }
+      };
+
+      const openBranches = async () => {
+        setFeedback(null);
+        try {
+          const result = await onAction(workspace.id, { action: 'branches' });
+          setBranches(result.branches ?? []);
+        } catch (error) {
+          setFeedback({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      };
 
       return h(
         'div',
@@ -251,6 +335,88 @@ window.__ModuleLoader__.load({
           { className: 'wgs-row-main' },
           h('div', { className: 'wgs-row-title' }, workspace.title || workspace.path),
           h('div', { className: 'wgs-row-path', title: workspace.path }, workspace.path),
+          repo
+            ? h(
+                'div',
+                { className: 'wgs-actions' },
+                h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void run({ action: 'stage' }) }, t('stageAll')),
+                h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void run({ action: 'unstage' }) }, t('unstageAll')),
+                h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void run({ action: 'fetch' }) }, t('fetch')),
+                h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void run({ action: 'pull' }) }, t('pull')),
+                h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void run({ action: 'push' }) }, t('push')),
+                h('button', { type: 'button', className: 'wgs-button', disabled: busy, onClick: () => void openBranches() }, t('branch')),
+                confirmDiscard
+                  ? h(
+                      React.Fragment,
+                      null,
+                      h('span', { className: 'wgs-warn' }, t('discardConfirm')),
+                      h('button', { type: 'button', className: 'wgs-button wgs-danger', disabled: busy, onClick: () => { setConfirmDiscard(false); void run({ action: 'discard' }); } }, t('confirm')),
+                      h('button', { type: 'button', className: 'wgs-button', onClick: () => setConfirmDiscard(false) }, t('cancel')),
+                    )
+                  : h('button', { type: 'button', className: 'wgs-button wgs-danger', disabled: busy, onClick: () => setConfirmDiscard(true) }, t('discard')),
+                h('button', {
+                  type: 'button',
+                  className: 'wgs-button wgs-primary',
+                  disabled: busy,
+                  onClick: () => setShowCommit(value => !value),
+                }, t('commit')),
+              )
+            : null,
+          repo && showCommit
+            ? h(
+                'div',
+                { className: 'wgs-actions wgs-commit-panel' },
+                h('input', {
+                  className: 'wgs-input',
+                  value: message,
+                  placeholder: t('commitPlaceholder'),
+                  disabled: busy,
+                  autoFocus: true,
+                  onChange: event => setMessage(event.target.value),
+                  onKeyDown: event => {
+                    if (event.key === 'Enter' && message.trim()) void run({ action: 'commit', message });
+                  },
+                }),
+                h('button', {
+                  type: 'button',
+                  className: 'wgs-button wgs-primary',
+                  disabled: busy || !message.trim(),
+                  onClick: () => void run({ action: 'commit', message }),
+                }, t('commit')),
+              )
+            : null,
+          repo && branches
+            ? h(
+                'div',
+                { className: 'wgs-actions wgs-branch-panel' },
+                branches.length === 0
+                  ? h('span', { className: 'wgs-muted' }, t('branchesEmpty'))
+                  : branches.map(branch =>
+                      h('button', {
+                        key: branch,
+                        type: 'button',
+                        className: branch === workspace.branch ? 'wgs-button wgs-current' : 'wgs-button',
+                        disabled: busy || branch === workspace.branch,
+                        onClick: () => void run({ action: 'checkout', branch }),
+                      }, branch)),
+                h('input', {
+                  className: 'wgs-input',
+                  value: branchName,
+                  placeholder: t('newBranchPlaceholder'),
+                  disabled: busy,
+                  onChange: event => setBranchName(event.target.value),
+                }),
+                h('button', {
+                  type: 'button',
+                  className: 'wgs-button wgs-primary',
+                  disabled: busy || !branchName.trim(),
+                  onClick: () => void run({ action: 'createBranch', branch: branchName }),
+                }, t('create')),
+              )
+            : null,
+          feedback
+            ? h('div', { className: feedback.ok ? 'wgs-ok' : 'wgs-error' }, feedback.ok ? t('actionDone') : `${t('actionFailed')}: ${feedback.error}`)
+            : null,
         ),
         h(
           'div',
@@ -271,6 +437,18 @@ window.__ModuleLoader__.load({
       const total = data ? data.workspaces.length : 0;
       const dirty = dirtyCount(data);
       const globalError = data && data.error === 'git-not-found' ? t('gitMissing') : state.error;
+      const [busy, setBusy] = React.useState(null);
+
+      const handleAction = async (workspaceId, body) => {
+        setBusy(workspaceId);
+        try {
+          const result = await postAction(workspaceId, body);
+          if (body.action !== 'branches') await refresh({ force: true });
+          return result;
+        } finally {
+          setBusy(null);
+        }
+      };
 
       return h(
         'div',
@@ -308,7 +486,14 @@ window.__ModuleLoader__.load({
           ? h(
               'div',
               { className: 'wgs-list', role: 'list' },
-              data.workspaces.map(workspace => h(WorkspaceRow, { key: workspace.id, workspace })),
+              data.workspaces.map(workspace =>
+                h(WorkspaceRow, {
+                  key: workspace.id,
+                  workspace,
+                  onAction: handleAction,
+                  busy: busy === workspace.id,
+                }),
+              ),
             )
           : null,
         data ? h('div', { className: 'wgs-foot' }, `${t('updated')} ${formatTime(data.scannedAt)}`) : null,
@@ -371,6 +556,18 @@ window.__ModuleLoader__.load({
         opacity: 0.6;
         cursor: default;
       }
+      .wgs-button.wgs-primary {
+        border-color: var(--dsw-alias-brand-primary);
+        color: var(--dsw-alias-brand-primary);
+      }
+      .wgs-button.wgs-danger {
+        border-color: var(--dsw-alias-state-error-primary);
+        color: var(--dsw-alias-state-error-primary);
+      }
+      .wgs-button.wgs-current {
+        border-color: var(--dsw-alias-brand-primary);
+        background: var(--dsw-alias-bg-layer-2);
+      }
       .wgs-banner {
         margin: 0 0 16px;
         padding: 10px 12px;
@@ -404,6 +601,7 @@ window.__ModuleLoader__.load({
       }
       .wgs-row-main {
         min-width: 0;
+        flex: 1;
       }
       .wgs-row-title {
         font-size: 13px;
@@ -419,6 +617,40 @@ window.__ModuleLoader__.load({
         text-overflow: ellipsis;
         white-space: nowrap;
         max-width: 52vw;
+      }
+      .wgs-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .wgs-commit {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex: 1 1 220px;
+        min-width: 160px;
+      }
+      .wgs-input {
+        font: inherit;
+        font-size: 12px;
+        flex: 1;
+        min-width: 80px;
+        padding: 5px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--dsw-alias-border-l1);
+        background: var(--dsw-alias-bg-base);
+        color: var(--dsw-alias-label-primary);
+      }
+      .wgs-input:focus {
+        outline: 2px solid var(--dsw-alias-brand-primary);
+        outline-offset: 1px;
+      }
+      .wgs-commit-panel,
+      .wgs-branch-panel {
+        padding-top: 8px;
+        border-top: 1px dashed var(--dsw-alias-border-l1);
       }
       .wgs-row-meta {
         display: flex;
@@ -476,6 +708,20 @@ window.__ModuleLoader__.load({
       .wgs-muted {
         font-size: 12px;
         color: var(--dsw-alias-label-secondary);
+      }
+      .wgs-warn {
+        font-size: 11px;
+        color: var(--dsw-alias-state-error-primary);
+      }
+      .wgs-error {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--dsw-alias-state-error-primary);
+      }
+      .wgs-ok {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--dsw-alias-state-success-primary);
       }
       .wgs-foot {
         margin-top: 10px;

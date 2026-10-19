@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { parsePorcelainV2, readGitStatus } from '../src/host/git.js';
+import { normalizeAction, parsePorcelainV2, readGitStatus, runAction } from '../src/host/git.js';
 
 const NORMAL = [
   '# branch.oid 3e7c4cb18c8ed05308bd879ea013684b8954999a',
@@ -149,6 +149,87 @@ test('parses a real temporary repository', () => {
     assert.equal(changed.unstaged, 1);
     assert.equal(changed.untracked, 1);
     assert.equal(changed.staged, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('normalizes action parameters', () => {
+  assert.deepEqual(normalizeAction('stage'), { action: 'stage' });
+  assert.deepEqual(normalizeAction('commit', undefined, '  msg  '), { action: 'commit', message: 'msg' });
+  assert.deepEqual(normalizeAction('checkout', ' dev '), { action: 'checkout', branch: 'dev' });
+  assert.throws(() => normalizeAction('commit', undefined, '   '), /commit message/);
+  assert.throws(() => normalizeAction('checkout', ''), /branch/);
+  assert.throws(() => normalizeAction('rm -rf'), /unknown action/);
+});
+
+function stubProcess() {
+  const calls = [];
+  const subprocess = {
+    spawn(spec) {
+      calls.push(spec);
+      return {
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+        collected: { stdout: reader(''), stderr: reader('') },
+      };
+    },
+  };
+  return { calls, subprocess };
+}
+
+test('runs stage, commit, and discard as explicit argv arrays', async () => {
+  const { calls, subprocess } = stubProcess();
+  assert.deepEqual(await runAction(subprocess, '/usr/bin/git', '/work', { action: 'stage' }), { ok: true });
+  assert.deepEqual(calls[0].argv, ['/usr/bin/git', 'add', '--all']);
+
+  await runAction(subprocess, '/usr/bin/git', '/work', { action: 'commit', message: 'hello' });
+  assert.deepEqual(calls[1].argv, ['/usr/bin/git', 'commit', '-m', 'hello']);
+
+  await runAction(subprocess, '/usr/bin/git', '/work', { action: 'discard' });
+  assert.deepEqual(calls[2].argv, ['/usr/bin/git', 'reset', '--hard', 'HEAD']);
+  assert.deepEqual(calls[3].argv, ['/usr/bin/git', 'clean', '-fd']);
+});
+
+test('performs basic operations on a real temporary repository', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-workspace-git-ops-'));
+  const git = (...args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8' });
+  const subprocess = {
+    spawn(spec) {
+      try {
+        const stdout = execFileSync(spec.argv[0], spec.argv.slice(1), {
+          cwd: spec.cwd,
+          encoding: 'utf8',
+          env: { ...process.env, ...spec.env },
+        });
+        return { done: Promise.resolve({ exitCode: 0, signal: null }), collected: { stdout: reader(stdout), stderr: reader('') } };
+      } catch (error) {
+        return {
+          done: Promise.resolve({ exitCode: error.status ?? 1, signal: null }),
+          collected: { stdout: reader(String(error.stdout ?? '')), stderr: reader(String(error.stderr ?? error.message)) },
+        };
+      }
+    },
+  };
+  const run = request => runAction(subprocess, 'git', directory, request);
+
+  try {
+    git('init', '-q', '-b', 'main');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init', '--allow-empty');
+    writeFileSync(join(directory, 'a.txt'), 'a\n');
+
+    assert.deepEqual(await run({ action: 'stage' }), { ok: true });
+    assert.equal(git('diff', '--cached', '--name-only').trim(), 'a.txt');
+
+    assert.deepEqual(await run({ action: 'commit', message: 'add a' }), { ok: true });
+    assert.equal(git('log', '-1', '--format=%s').trim(), 'add a');
+
+    assert.deepEqual(await run({ action: 'createBranch', branch: 'dev' }), { ok: true });
+    assert.equal(git('rev-parse', '--abbrev-ref', 'HEAD').trim(), 'dev');
+
+    writeFileSync(join(directory, 'a.txt'), 'dirty\n');
+    writeFileSync(join(directory, 'b.txt'), 'b\n');
+    assert.deepEqual(await run({ action: 'discard' }), { ok: true });
+    assert.equal(git('status', '--porcelain').trim(), '');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
