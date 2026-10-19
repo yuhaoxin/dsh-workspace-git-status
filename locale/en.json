@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workspace Git Status",
+    "description": "Shows each workspace's Git branch, pending changes, and ahead/behind counts in the left sidebar."
+  }
+}

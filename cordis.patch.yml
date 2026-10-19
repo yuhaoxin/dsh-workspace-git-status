@@ -1,0 +1,3 @@
+- insert:
+    - id: workspace-git-status
+      name: dsh-workspace-git-status
