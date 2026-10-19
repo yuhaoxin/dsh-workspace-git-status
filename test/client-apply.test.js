@@ -19,7 +19,7 @@ function makeRequire() {
     assert.equal(name, 'react');
     return {
       createElement: () => null,
-      useSyncExternalStore: () => ({ phase: 'loading', data: null, error: null, refreshing: false }),
+      useSyncExternalStore: () => ({ data: null, error: null, refreshing: false }),
     };
   };
 }

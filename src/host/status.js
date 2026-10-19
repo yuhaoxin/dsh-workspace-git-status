@@ -103,6 +103,10 @@ export function createApi(service) {
       return;
     }
 
-    json(res, await service.scan({ force: url.searchParams.get('force') === '1' }));
+    try {
+      json(res, await service.scan({ force: url.searchParams.get('force') === '1' }));
+    } catch (error) {
+      json(res, { error: error instanceof Error ? error.message : String(error) }, 500);
+    }
   };
 }

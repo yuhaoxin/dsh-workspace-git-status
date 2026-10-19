@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
     let t;
     let timer = null;
     let inflight = null;
-    let snapshot = { phase: 'loading', data: null, error: null, refreshing: false };
+    let snapshot = { data: null, error: null, refreshing: false };
     const listeners = new Set();
 
     function publish(patch) {
@@ -87,18 +87,17 @@ window.__ModuleLoader__.load({
     }
 
     function refresh({ force = false, manual = false } = {}) {
-      if (inflight) return inflight;
       if (manual) publish({ refreshing: true });
+      if (inflight) return inflight;
 
       inflight = fetch(ENDPOINT + (force ? '?force=1' : ''), { headers: { accept: 'application/json' } })
         .then(response => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           return response.json();
         })
-        .then(data => publish({ phase: 'ready', data, error: null, refreshing: false }))
+        .then(data => publish({ data, error: null, refreshing: false }))
         .catch(error => {
           publish({
-            phase: snapshot.data ? 'ready' : 'error',
             error: error instanceof Error ? error.message : String(error),
             refreshing: false,
           });
