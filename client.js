@@ -16,7 +16,7 @@ window.__ModuleLoader__.load({
       refresh: '刷新',
       refreshing: '刷新中…',
       loading: '正在读取…',
-      empty: '还没有工作区。',
+      empty: '还没有 Git 仓库。',
       workspaces: '工作区',
       dirty: '有改动',
       updated: '更新于',
@@ -27,7 +27,6 @@ window.__ModuleLoader__.load({
       conflicts: '冲突',
       detached: '游离 HEAD',
       unborn: '尚无提交',
-      notRepo: '非 Git 仓库',
       error: '读取失败',
       gitMissing: '未找到 git 可执行文件，无法读取仓库状态。',
       timeout: '读取超时',
@@ -61,7 +60,7 @@ window.__ModuleLoader__.load({
       refresh: 'Refresh',
       refreshing: 'Refreshing…',
       loading: 'Reading…',
-      empty: 'No workspaces yet.',
+      empty: 'No Git repositories yet.',
       workspaces: 'Workspaces',
       dirty: 'Dirty',
       updated: 'Updated',
@@ -72,7 +71,6 @@ window.__ModuleLoader__.load({
       conflicts: 'conflicts',
       detached: 'Detached HEAD',
       unborn: 'no commits',
-      notRepo: 'Not a Git repository',
       error: 'Read failed',
       gitMissing: 'The git executable was not found, so repository status cannot be read.',
       timeout: 'Read timed out',
@@ -489,7 +487,7 @@ window.__ModuleLoader__.load({
           repo && (workspace.ahead > 0 || workspace.behind > 0)
             ? h('span', { className: 'wgs-sync' }, `↑${workspace.ahead} ↓${workspace.behind}`)
             : null,
-          repo ? null : h('span', { className: 'wgs-muted' }, workspace.state === 'not-repo' ? t('notRepo') : `${t('error')}: ${rowError(workspace)}`),
+          repo ? null : h('span', { className: 'wgs-muted' }, `${t('error')}: ${rowError(workspace)}`),
         ),
       );
     }

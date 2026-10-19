@@ -109,7 +109,11 @@ export function createStatusService(ctx) {
         ...(await readGitStatus(ctx.subprocess, gitPath, workspace.path)),
       })),
     );
-    return { scannedAt: new Date().toISOString(), workspaces: results };
+    // 面板只处理 Git 仓库；不是仓库的工作区没有可展示或可操作的内容。
+    return {
+      scannedAt: new Date().toISOString(),
+      workspaces: results.filter(workspace => workspace.state !== 'not-repo'),
+    };
   };
 
   const scan = ({ force = false } = {}) => {
