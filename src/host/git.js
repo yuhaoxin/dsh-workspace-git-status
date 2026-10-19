@@ -14,9 +14,12 @@ const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 
 /**
- * 解析 `git status --porcelain=v2 --branch` 的成功输出。
+ * 解析 `git status --porcelain=v2 --branch -z` 的成功输出。
  *
- * 只依赖行首标记与 XY 两位；路径与相似度字段不参与计数。
+ * 记录以 NUL 分隔；重命名/复制条目（`2 `）在路径之后多一个 NUL 分隔的
+ * 原路径。路径可以包含空格和换行，所以不能按行切。
+ *
+ * 计数来自 XY 两位与行首标记；文件条目同时按状态分组返回，供面板展开。
  */
 export function parsePorcelainV2(text) {
   const status = {
@@ -31,36 +34,65 @@ export function parsePorcelainV2(text) {
     unstaged: 0,
     untracked: 0,
     conflicts: 0,
+    files: { staged: [], unstaged: [], untracked: [], conflicts: [] },
   };
 
-  for (const line of text.split('\n')) {
-    if (line.startsWith('# branch.oid ')) {
-      const oid = line.slice('# branch.oid '.length).trim();
+  const records = text.split('\0');
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record === '') continue;
+
+    if (record.startsWith('# branch.oid ')) {
+      const oid = record.slice('# branch.oid '.length).trim();
       status.oid = oid === '(initial)' ? null : oid;
-    } else if (line.startsWith('# branch.head ')) {
-      const head = line.slice('# branch.head '.length).trim();
+    } else if (record.startsWith('# branch.head ')) {
+      const head = record.slice('# branch.head '.length).trim();
       if (head === '(detached)') status.detached = true;
       else status.branch = head;
-    } else if (line.startsWith('# branch.upstream ')) {
-      status.upstream = line.slice('# branch.upstream '.length).trim();
-    } else if (line.startsWith('# branch.ab ')) {
-      const match = /^\+(\d+) -(\d+)$/.exec(line.slice('# branch.ab '.length).trim());
+    } else if (record.startsWith('# branch.upstream ')) {
+      status.upstream = record.slice('# branch.upstream '.length).trim();
+    } else if (record.startsWith('# branch.ab ')) {
+      const match = /^\+(\d+) -(\d+)$/.exec(record.slice('# branch.ab '.length).trim());
       if (match) {
         status.ahead = Number(match[1]);
         status.behind = Number(match[2]);
       }
-    } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
-      const xy = line.slice(2, 4);
-      if (xy[0] !== '.') status.staged += 1;
-      if (xy[1] !== '.') status.unstaged += 1;
-    } else if (line.startsWith('u ')) {
+    } else if (record.startsWith('1 ') || record.startsWith('2 ')) {
+      const xy = record.slice(2, 4);
+      const renamed = record.startsWith('2 ');
+      const path = pathOf(record);
+      const previous = renamed ? records[++index] : undefined;
+      const file = { path, index: xy[0], worktree: xy[1] };
+      if (renamed) file.from = previous;
+      if (xy[0] !== '.') {
+        status.staged += 1;
+        status.files.staged.push(file);
+      }
+      if (xy[1] !== '.') {
+        status.unstaged += 1;
+        status.files.unstaged.push(file);
+      }
+    } else if (record.startsWith('u ')) {
       status.conflicts += 1;
-    } else if (line.startsWith('? ')) {
+      status.files.conflicts.push({ path: pathOf(record) });
+    } else if (record.startsWith('? ')) {
       status.untracked += 1;
+      status.files.untracked.push({ path: record.slice(2) });
     }
   }
 
   return status;
+}
+
+/**
+ * 取普通/重命名条目的路径。`1 ` 的路径从第 9 个空格后开始，`2 ` 的路径在
+ * 相似度字段之后；两者都用最后一个空格后的剩余部分，路径本身可以含空格。
+ */
+function pathOf(record) {
+  const fields = record.split(' ');
+  return record.startsWith('2 ')
+    ? fields.slice(9).join(' ')
+    : fields.slice(8).join(' ');
 }
 
 function readText(reader) {
@@ -126,7 +158,7 @@ export async function readGitStatus(subprocess, gitPath, workspacePath) {
     subprocess,
     gitPath,
     workspacePath,
-    ['status', '--porcelain=v2', '--branch', '--untracked-files=normal'],
+    ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=normal'],
     TIMEOUT_MS,
   );
 

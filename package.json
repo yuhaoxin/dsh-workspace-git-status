@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-git-status",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "DeepSeek Harness plugin: each workspace's Git status in the left sidebar.",
   "type": "module",
   "license": "MIT",

@@ -49,6 +49,9 @@ window.__ModuleLoader__.load({
       actionFailed: '操作失败',
       actionDone: '操作完成',
       branchesEmpty: '没有可用分支',
+      expandFiles: '文件',
+      collapseFiles: '收起文件',
+      noFiles: '没有文件',
     };
 
     const en = {
@@ -91,6 +94,9 @@ window.__ModuleLoader__.load({
       actionFailed: 'Action failed',
       actionDone: 'Done',
       branchesEmpty: 'No branches available',
+      expandFiles: 'Files',
+      collapseFiles: 'Hide files',
+      noFiles: 'No files',
     };
 
     let t;
@@ -288,6 +294,41 @@ window.__ModuleLoader__.load({
       return h('span', { className: 'wgs-counts' }, chips);
     }
 
+    const FILE_GROUPS = [
+      ['staged', 'staged'],
+      ['unstaged', 'unstaged'],
+      ['untracked', 'untracked'],
+      ['conflicts', 'conflicts'],
+    ];
+
+    function FileList({ files }) {
+      const groups = FILE_GROUPS.map(([key, label]) => {
+        const entries = files?.[key] ?? [];
+        return entries.length === 0
+          ? null
+          : h(
+              'div',
+              { className: 'wgs-file-group', key },
+              h('div', { className: 'wgs-file-head' }, `${t(label)} ${entries.length}`),
+              h(
+                'ul',
+                { className: 'wgs-file-items' },
+                entries.map((file, index) =>
+                  h(
+                    'li',
+                    { className: 'wgs-file-item', key: `${file.path}:${index}`, title: file.from ? `${file.from} → ${file.path}` : file.path },
+                    h('span', { className: 'wgs-file-path' }, file.path),
+                    file.from ? h('span', { className: 'wgs-file-from' }, `← ${file.from}`) : null,
+                  ),
+                ),
+              ),
+            );
+      });
+
+      if (groups.every(group => group === null)) return h('div', { className: 'wgs-actions wgs-file-panel wgs-muted' }, t('noFiles'));
+      return h('div', { className: 'wgs-actions wgs-file-panel' }, groups);
+    }
+
     function WorkspaceRow({ workspace, onAction, busy }) {
       const repo = workspace.state === 'repo';
       const [message, setMessage] = React.useState('');
@@ -295,6 +336,7 @@ window.__ModuleLoader__.load({
       const [branches, setBranches] = React.useState(null);
       const [confirmDiscard, setConfirmDiscard] = React.useState(false);
       const [showCommit, setShowCommit] = React.useState(false);
+      const [showFiles, setShowFiles] = React.useState(false);
       const [feedback, setFeedback] = React.useState(null);
 
       const run = async body => {
@@ -360,7 +402,16 @@ window.__ModuleLoader__.load({
                   disabled: busy,
                   onClick: () => setShowCommit(value => !value),
                 }, t('commit')),
+                h('button', {
+                  type: 'button',
+                  className: 'wgs-button',
+                  disabled: busy || pendingCount(workspace) === 0,
+                  onClick: () => setShowFiles(value => !value),
+                }, showFiles ? t('collapseFiles') : t('expandFiles')),
               )
+            : null,
+          repo && showFiles
+            ? h(FileList, { files: workspace.files })
             : null,
           repo && showCommit
             ? h(
@@ -648,9 +699,49 @@ window.__ModuleLoader__.load({
         outline-offset: 1px;
       }
       .wgs-commit-panel,
-      .wgs-branch-panel {
+      .wgs-branch-panel,
+      .wgs-file-panel {
         padding-top: 8px;
         border-top: 1px dashed var(--dsw-alias-border-l1);
+      }
+      .wgs-file-panel {
+        display: block;
+      }
+      .wgs-file-group + .wgs-file-group {
+        margin-top: 8px;
+      }
+      .wgs-file-head {
+        font-size: 11px;
+        color: var(--dsw-alias-label-secondary);
+        margin-bottom: 4px;
+      }
+      .wgs-file-items {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        max-height: 220px;
+        overflow: auto;
+      }
+      .wgs-file-item {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        line-height: 1.7;
+        padding: 0 4px;
+      }
+      .wgs-file-path {
+        color: var(--dsw-alias-label-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .wgs-file-from {
+        color: var(--dsw-alias-label-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .wgs-row-meta {
         display: flex;
