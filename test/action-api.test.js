@@ -33,12 +33,31 @@ test('guards the action route and dispatches validated requests', async () => {
     assert.equal(status.status, 200);
     assert.deepEqual(await status.json(), { scannedAt: '2026-10-19T00:00:00.000Z', workspaces: [] });
 
-    const noOrigin = await fetch(`${base}/api/workspace-git/action`, {
+    // 桌面端代理转发时会剥掉 Origin；无 Origin 的 JSON POST 必须被接受。
+    const proxied = await fetch(`${base}/api/workspace-git/action`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ workspaceId: 'w1', action: 'stage' }),
     });
-    assert.equal(noOrigin.status, 403);
+    assert.equal(proxied.status, 200);
+    assert.deepEqual(seen, [{ workspaceId: 'w1', request: { action: 'stage' } }]);
+    seen.length = 0;
+
+    const foreignOrigin = await fetch(`${base}/api/workspace-git/action`, {
+      method: 'POST',
+      headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'w1', action: 'stage' }),
+    });
+    assert.equal(foreignOrigin.status, 403);
+    assert.deepEqual(seen, []);
+
+    const desktopOrigin = await fetch(`${base}/api/workspace-git/action`, {
+      method: 'POST',
+      headers: { origin: 'dsh-app://app', 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'w1', action: 'stage' }),
+    });
+    assert.equal(desktopOrigin.status, 200);
+    seen.length = 0;
 
     const wrongType = await fetch(`${base}/api/workspace-git/action`, {
       method: 'POST',

@@ -23,11 +23,20 @@ function isLoopback(req) {
 }
 
 /**
- * 写操作要求 Origin 与 Host 同源。浏览器同源 fetch 会带 Origin，跨站表单
- * 不会带 JSON Content-Type；两者同时校验，避免被普通表单或预检绕过。
+ * 写操作的来源校验。
+ *
+ * 桌面端渲染器的页面来源是 `dsh-app://app`，它发往 Host 的请求由 Electron
+ * 主进程转发，转发时会删掉 Origin。因此“没有 Origin”是桌面端的正常形态，
+ * 不能拒绝。浏览器里同源 fetch 会带 Origin；跨站请求带的是别的 Origin。
+ *
+ * 放行条件：无 Origin，或 Origin 是 `dsh-app://app`，或 Origin 的 host 与
+ * 请求 Host 相同。其余一律拒绝。Content-Type 必须是 JSON，跨站表单发不出
+ * 这个类型，构成第二道门。
  */
-function isSameOrigin(req) {
+function isAllowedOrigin(req) {
   const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  if (origin === 'dsh-app://app') return true;
   const host = req.headers.host;
   if (typeof origin !== 'string' || typeof host !== 'string') return false;
   try {
@@ -168,7 +177,7 @@ export function createApi(service) {
         json(res, { error: 'method not allowed' }, 405);
         return;
       }
-      if (!isSameOrigin(req) || !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+      if (!isAllowedOrigin(req) || !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
         json(res, { error: 'invalid request origin or content type' }, 403);
         return;
       }

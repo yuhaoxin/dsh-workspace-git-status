@@ -52,7 +52,7 @@ dsh plugin --profile desktop add "$PWD"
 - 分支列表来自 `git branch --format=%(refname:short)`；切换使用 `git checkout <branch>`；新建使用 `git checkout -b <branch>`。
 - 丢弃改动是破坏性操作：`git reset --hard HEAD` 之后紧跟 `git clean -fd`，未跟踪文件与目录会被删除。界面需要二次确认。
 - 所有写操作按工作区串行执行，避免同一仓库的并发写冲突。
-- 写操作路由只接受回环地址、同源 `Origin` 和 `application/json`，并且只允许上面列出的动作；git 以数组参数启动，不经过 shell。
+- 写操作路由只接受回环地址和 `application/json`。`Origin` 为空（桌面端代理转发会剥掉它）、为 `dsh-app://app` 或与请求 Host 同源时放行，其它来源拒绝；只允许上面列出的动作。git 以数组参数启动，不经过 shell。
 
 ## 刷新
 
