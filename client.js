@@ -121,6 +121,9 @@ window.__ModuleLoader__.load({
       return snapshot;
     }
 
+    // 供插槽注入的只读源：订阅即开始轮询，最后一个订阅者离开时停止。
+    const gitSource = { getSnapshot, subscribe };
+
     function useGitStatus() {
       return React.useSyncExternalStore(subscribe, getSnapshot);
     }
@@ -189,6 +192,36 @@ window.__ModuleLoader__.load({
       return workspace.error;
     }
 
+    /** 当前会话所属的工作区：工作区成员关系是权威来源。 */
+    function workspaceOfSession(items, sessionId) {
+      if (typeof sessionId !== 'string') return null;
+      return items.find(item => item.sessionIds.includes(sessionId)) ?? null;
+    }
+
+    /** 工作区对应的 Git 行。不是仓库的工作区没有行。 */
+    function repoOfWorkspace(git, workspace) {
+      if (!git?.data || !workspace) return null;
+      return git.data.workspaces.find(row => row.id === workspace.workspaceId) ?? null;
+    }
+
+    function dockLabel(repo) {
+      if (repo.state !== 'repo') return `${t('error')}: ${rowError(repo)}`;
+
+      const counts = [];
+      if (repo.staged) counts.push(`${repo.staged} ${t('staged')}`);
+      if (repo.unstaged) counts.push(`${repo.unstaged} ${t('unstaged')}`);
+      if (repo.untracked) counts.push(`${repo.untracked} ${t('untracked')}`);
+      if (repo.conflicts) counts.push(`${repo.conflicts} ${t('conflicts')}`);
+      const sync = repo.ahead > 0 || repo.behind > 0 ? `↑${repo.ahead} ↓${repo.behind}` : '';
+
+      return [
+        branchLabel(repo),
+        unborn(repo) ? t('unborn') : '',
+        counts.length > 0 ? counts.join(' · ') : t('clean'),
+        sync,
+      ].filter(Boolean).join(' · ');
+    }
+
     function formatTime(iso) {
       const date = new Date(iso);
       return Number.isNaN(date.getTime())
@@ -209,6 +242,29 @@ window.__ModuleLoader__.load({
       return result;
     }
 
+    function GitGlyph({ size = 20 }) {
+      return h(
+        'svg',
+        {
+          viewBox: '0 0 24 24',
+          width: size,
+          height: size,
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.8,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': true,
+          style: { display: 'block' },
+        },
+        h('circle', { cx: 6, cy: 5.5, r: 2.2 }),
+        h('circle', { cx: 6, cy: 18.5, r: 2.2 }),
+        h('circle', { cx: 18, cy: 7, r: 2.2 }),
+        h('path', { d: 'M6 7.7v8.6' }),
+        h('path', { d: 'M18 9.2c0 3.1-2.4 5-5.7 5.4' }),
+      );
+    }
+
     function GitIcon({ size = 20, active = false }) {
       const state = useGitStatus();
       const dirty = dirtyCount(state.data);
@@ -227,26 +283,7 @@ window.__ModuleLoader__.load({
             opacity: active ? 1 : 0.82,
           },
         },
-        h(
-          'svg',
-          {
-            viewBox: '0 0 24 24',
-            width: size,
-            height: size,
-            fill: 'none',
-            stroke: 'currentColor',
-            strokeWidth: 1.8,
-            strokeLinecap: 'round',
-            strokeLinejoin: 'round',
-            'aria-hidden': true,
-            style: { display: 'block' },
-          },
-          h('circle', { cx: 6, cy: 5.5, r: 2.2 }),
-          h('circle', { cx: 6, cy: 18.5, r: 2.2 }),
-          h('circle', { cx: 18, cy: 7, r: 2.2 }),
-          h('path', { d: 'M6 7.7v8.6' }),
-          h('path', { d: 'M18 9.2c0 3.1-2.4 5-5.7 5.4' }),
-        ),
+        h(GitGlyph, { size }),
         dirty > 0
           ? h('span', {
               'aria-hidden': true,
@@ -265,17 +302,23 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function BranchChip({ workspace }) {
+    function branchLabel(workspace) {
       const label = workspace.detached
         ? `${t('detached')}${workspace.oid ? ` ${workspace.oid.slice(0, 7)}` : ''}`
         : workspace.branch;
-      const unborn = workspace.oid === null && !workspace.detached;
+      return label || '—';
+    }
 
+    function unborn(workspace) {
+      return workspace.oid === null && !workspace.detached;
+    }
+
+    function BranchChip({ workspace }) {
       return h(
         'span',
         { className: 'wgs-branch' },
-        label || '—',
-        unborn ? h('span', { className: 'wgs-branch-note' }, ` · ${t('unborn')}`) : null,
+        branchLabel(workspace),
+        unborn(workspace) ? h('span', { className: 'wgs-branch-note' }, ` · ${t('unborn')}`) : null,
       );
     }
 
@@ -290,6 +333,42 @@ window.__ModuleLoader__.load({
       if (workspace.conflicts) chips.push(h('span', { key: 'conflicts', className: 'wgs-count wgs-count-conflict' }, `${workspace.conflicts} ${t('conflicts')}`));
 
       return h('span', { className: 'wgs-counts' }, chips);
+    }
+
+    /**
+     * 输入框下方状态栏里的 Git 胶囊：显示当前会话所属工作区仓库的分支、
+     * 各类改动计数与领先/落后提交。
+     */
+    function GitDockPill({ sessionId, useWorkspaces, useWorkspaceGit, t }) {
+      const git = useWorkspaceGit(value => value);
+      const workspace = useWorkspaces(value => workspaceOfSession(value?.items ?? [], sessionId));
+      if (!workspace) return null;
+
+      const repo = repoOfWorkspace(git, workspace);
+      if (!repo) return null;
+
+      const dirty = repo.state === 'repo' && pendingCount(repo) > 0;
+      return h(
+        'span',
+        {
+          title: `${workspace.title || workspace.path}\n${workspace.path}`,
+          style: {
+            minWidth: 0,
+            maxWidth: '100%',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '1px 8px',
+            fontSize: 'calc(var(--dsh-content-font-size-secondary, 13px) - 1px)',
+            lineHeight: 'calc(20px + var(--dsh-content-font-delta-secondary, 0px))',
+            color: dirty ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-tertiary)',
+            fontVariantNumeric: 'tabular-nums',
+            whiteSpace: 'nowrap',
+          },
+        },
+        h('span', { style: { display: 'inline-flex', flex: 'none', color: dirty ? 'var(--dsw-alias-state-warn-primary)' : 'inherit' } }, h(GitGlyph, { size: 14 })),
+        h('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, dockLabel(repo)),
+      );
     }
 
     const FILE_GROUPS = [
@@ -856,6 +935,20 @@ window.__ModuleLoader__.load({
             locale: NS,
           },
           GitPanel,
+        ),
+      );
+
+      // 输入框下方状态栏（会话作用域）。宿主没有这个插槽时不注册，插件其余部分照常工作。
+      ctx.slots.inject('conversation.composer.dock', () =>
+        ctx.slots.register(
+          {
+            name: 'conversation.composer.dock',
+            id: 'workspace-git',
+            order: 10,
+            locale: NS,
+            inject: () => ({ hooks: { workspaceGit: gitSource } }),
+          },
+          GitDockPill,
         ),
       );
     }

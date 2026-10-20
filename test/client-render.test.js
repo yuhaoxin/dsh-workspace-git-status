@@ -155,3 +155,43 @@ test('shows discard and commit for every kind of pending change', () => {
     assert.equal(labels.includes('提交'), true, `${name}: commit missing`);
   }
 });
+
+test('shows the current workspace repository in the composer dock', () => {
+  const { ctx, registrations } = makeContext();
+  loaded.factory(makeRequire()).apply(ctx);
+  const dock = registrations.find(entry => entry.options.name === 'conversation.composer.dock');
+
+  const hooks = {
+    sessionId: 's-1',
+    useWorkspaces: selector => selector({ items: [{ workspaceId: 'ws-1', path: '/tmp/demo', title: 'demo', sessionIds: ['s-1'] }] }),
+    useWorkspaceGit: selector => selector(snapshot),
+    t: key => dictionaries.get('workspaceGitStatus').zh[key] ?? key,
+  };
+
+  snapshot = {
+    data: {
+      scannedAt: new Date().toISOString(),
+      workspaces: [workspace({ staged: 2, unstaged: 1, ahead: 3 })],
+    },
+    error: null,
+    refreshing: false,
+  };
+
+  const text = textOf(render(React.createElement(dock.component, hooks)));
+  assert.equal(text, 'main · 2 已暂存 · 1 未暂存 · ↑3 ↓0');
+});
+
+test('shows nothing in the composer dock outside a Git repository', () => {
+  const { ctx, registrations } = makeContext();
+  loaded.factory(makeRequire()).apply(ctx);
+  const dock = registrations.find(entry => entry.options.name === 'conversation.composer.dock');
+  const hooks = {
+    sessionId: 's-1',
+    useWorkspaces: selector => selector({ items: [{ workspaceId: 'ws-2', path: '/tmp/plain', title: 'plain', sessionIds: ['s-1'] }] }),
+    useWorkspaceGit: selector => selector(snapshot),
+    t: key => dictionaries.get('workspaceGitStatus').zh[key] ?? key,
+  };
+
+  // ws-2 不是 Git 仓库，状态接口里没有它的行。
+  assert.equal(render(React.createElement(dock.component, hooks)), null);
+});

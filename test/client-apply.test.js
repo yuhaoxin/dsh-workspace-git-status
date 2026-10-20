@@ -58,7 +58,7 @@ test('registers the sidebar icon and the main panel under one id', () => {
 
   assert.equal(loaded.id, 'dsh-workspace-git-status');
   assert.deepEqual(plugin.inject, ['slots', 'locale']);
-  assert.equal(registrations.length, 2);
+  assert.equal(registrations.length, 3);
 
   const icon = registrations.find(entry => entry.options.name === 'sidebar.panellist');
   assert.equal(icon.options.id, 'workspace-git');
@@ -71,4 +71,9 @@ test('registers the sidebar icon and the main panel under one id', () => {
   assert.equal(panel.options.key, 'workspace-git');
   assert.equal(panel.options.locale, 'workspaceGitStatus');
   assert.equal(typeof panel.component, 'function');
+
+  const dock = registrations.find(entry => entry.options.name === 'conversation.composer.dock');
+  assert.equal(dock.options.id, 'workspace-git');
+  assert.equal(dock.options.order, 10);
+  assert.equal(typeof dock.component, 'function');
 });
